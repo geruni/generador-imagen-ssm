@@ -1,0 +1,4 @@
+flask==3.0.3
+graphviz==0.20.3
+cairosvg==2.7.1
+gunicorn==22.0.0
