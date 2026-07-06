@@ -1,5 +1,5 @@
 [phases.setup]
-nixPkgs = ["graphviz", "cairo", "pango", "gdk-pixbuf", "libffi"]
+nixPkgs = ["graphviz", "cairo", "pango", "gdk-pixbuf", "libffi", "pkg-config"]
 
 [phases.install]
 cmds = ["pip install -r requirements.txt"]
