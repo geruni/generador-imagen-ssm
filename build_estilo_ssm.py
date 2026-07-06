@@ -4,12 +4,10 @@ import math
 import re
 import textwrap
 import graphviz
-import cairosvg
+import tempfile
+import os
 
 def envolver_texto(texto, ancho_max=18):
-    """Corta el texto en lineas de maximo `ancho_max` caracteres,
-    respetando palabras completas, y lo une con \\n literal (que
-    Graphviz si interpreta como salto de linea dentro de una label)."""
     lineas = textwrap.wrap(texto, width=ancho_max, break_long_words=False)
     return '\n'.join(lineas)
 
@@ -31,7 +29,6 @@ def construir_modelo(json_path, salida='modelo_estilo_ssm'):
         y = cy + r * math.sin(angulo) * 0.78
         pos[act['id']] = (x, y)
 
-    # --- INPUT / OUTPUT: cajas grandes, texto envuelto, SIN conectar a un nodo ---
     input_txt = envolver_texto(data['input'], ancho_max=26)
     output_txt = envolver_texto(data['output'], ancho_max=26)
 
@@ -44,7 +41,6 @@ def construir_modelo(json_path, salida='modelo_estilo_ssm'):
            fontname='DejaVu Sans', margin='0.35,0.3', width='2.3',
            pos=f"{cx+r+3.3},{cy}!")
 
-    # --- Nodos de actividades en anillo, con texto envuelto y fuente mas grande ---
     for act in data['actividades']:
         x, y = pos[act['id']]
         etiqueta = f"{act['id'][1:]}. " + envolver_texto(act['texto'], ancho_max=16)
@@ -54,26 +50,41 @@ def construir_modelo(json_path, salida='modelo_estilo_ssm'):
                fontsize='12.5', fontcolor='#2c3a08', width='2.0', height='1.15',
                margin='0.18,0.12', pos=f"{x},{y}!")
 
-    # --- Flechas internas curvas ---
     for origen, destino in data['flechas']:
         g.edge(origen, destino, color='#444444', penwidth='0.9',
                arrowsize='0.6', dir='forward')
 
-    out_path = f'/home/claude/render/{salida}'
+    # Usar /tmp para Railway (no /home/claude/render/)
+    out_path = salida if salida.startswith('/') else f'/tmp/{salida}'
     svg_path = g.render(out_path, cleanup=True)
 
-    # --- Post-procesar el SVG: frontera elíptica + flechas input/output independientes ---
     insertar_frontera_y_flechas(svg_path, cx, cy, r)
 
     png_path = svg_path.replace('.svg', '.png')
-    cairosvg.svg2png(url=svg_path, write_to=png_path, scale=2.2, background_color='white')
+
+    # Convertir SVG a PNG sin cairosvg — usando svglib + reportlab
+    try:
+        from svglib.svglib import svg2rlg
+        from reportlab.graphics import renderPM
+        drawing = svg2rlg(svg_path)
+        if drawing is None:
+            raise ValueError("svg2rlg devolvio None")
+        renderPM.drawToFile(drawing, png_path, fmt='PNG', dpi=150)
+    except Exception as e:
+        # Fallback: devolver el SVG como PNG usando Pillow si está disponible
+        try:
+            from PIL import Image
+            import io
+            # Si no hay conversor, guardar el SVG renombrado como indicador
+            raise RuntimeError(f"No se pudo convertir SVG a PNG: {e}")
+        except Exception as e2:
+            raise RuntimeError(f"Conversion fallida: {e} / {e2}")
+
     print(f"Generado: {svg_path}")
     print(f"Generado: {png_path}")
+    return svg_path, png_path
 
 def insertar_frontera_y_flechas(svg_path, cx, cy, r):
-    """Inserta la elipse de frontera (calculada desde el bounding box real de
-    los nodos) y dibuja las flechas grandes de input/output como curvas que
-    apuntan al borde de la frontera, sin enganchar a un nodo especifico."""
     with open(svg_path, 'r', encoding='utf-8') as f:
         svg = f.read()
 
@@ -96,13 +107,9 @@ def insertar_frontera_y_flechas(svg_path, cx, cy, r):
     frontera_svg = (f'<ellipse cx="{fx:.1f}" cy="{fy:.1f}" rx="{frx:.1f}" ry="{fry:.1f}" '
                      f'fill="none" stroke="#777777" stroke-width="1" stroke-dasharray="2,3"/>\n')
 
-    # Punto de entrada en el borde izquierdo de la frontera, punto de salida en el derecho
     entrada_x = fx - frx
     salida_x = fx + frx
 
-    # Localizar las cajas INPUT / OUTPUT reales en el SVG.
-    # Con style='filled,rounded' Graphviz dibuja un <path> (no <polygon>),
-    # asi que extraemos todas las coordenadas numericas del atributo "d".
     def bbox_desde_path(titulo):
         m = re.search(rf'<title>{titulo}</title>\s*<path[^>]*d="([^"]+)"', svg)
         if not m:
@@ -158,5 +165,5 @@ def insertar_frontera_y_flechas(svg_path, cx, cy, r):
 
 if __name__ == '__main__':
     json_path = sys.argv[1] if len(sys.argv) > 1 else 'modelo_loreto_total.json'
-    salida = sys.argv[2] if len(sys.argv) > 2 else 'modelo_estilo_ssm'
+    salida = sys.argv[2] if len(sys.argv) > 2 else '/tmp/modelo_estilo_ssm'
     construir_modelo(json_path, salida)
